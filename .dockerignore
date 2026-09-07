@@ -1,0 +1,24 @@
+# Node / npm
+**/node_modules/
+**/dist/
+**/.next/
+**/*.tsbuildinfo
+**/next-env.d.ts
+
+# Local dev + logs
+.env
+.env.local
+.env.*.local
+*.log
+apps/api/uploads/
+.monkeycode-tmp-files/
+.data/
+
+# Git
+.git/
+.gitignore
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

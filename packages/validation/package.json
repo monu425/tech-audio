@@ -1,0 +1,23 @@
+{
+  "name": "@shop/validation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared zod schemas + re-exported zod used by backend validators and frontend forms",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false"
+  },
+  "dependencies": {
+    "zod": "^4.5.4"
+  }
+}

@@ -1,0 +1,21 @@
+node_modules
+**/node_modules
+.next
+**/.next
+dist
+**/dist
+coverage
+**/coverage
+.env
+**/.env
+.env.*.local
+**/.env.*.local
+.monkeycode-tmp-files
+*.tsbuildinfo
+**/*.tsbuildinfo
+next-env.d.ts
+
+# Infrastructure formats Prettier does not parse
+Dockerfile
+docker-compose.yml
+.dockerignore

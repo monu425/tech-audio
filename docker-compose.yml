@@ -1,0 +1,78 @@
+name: voltify
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      MONGODB_URI: mongodb://mongo:27017/ecommerce
+      MEDIA_UPLOAD_DIR: /data/uploads
+      STORE_URL: http://localhost:3000
+      ADMIN_URL: http://localhost:3001
+      # Tokens below must be overridden with long random secrets in real deploys.
+      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:-change-me-access-token-secret-min-32-chars}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-change-me-refresh-token-secret-min-32-chars}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+    volumes:
+      - media-data:/data/uploads
+    ports:
+      - "4000:4000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/api/v1/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  storefront:
+    build:
+      context: .
+      target: storefront
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PROXY_TARGET: http://api:4000
+      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  admin:
+    build:
+      context: .
+      target: admin
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PROXY_TARGET: http://api:4000
+    ports:
+      - "3001:3001"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  mongo-data:
+  media-data:
