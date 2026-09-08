@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { env } from '../config/env.js'
 
 export const ACCESS_COOKIE = 'access_token'
@@ -12,6 +13,22 @@ function baseCookieOptions(maxAgeMs) {
     path: '/',
     maxAge: maxAgeMs
   }
+}
+
+// The CSRF token cookie is intentionally readable by JavaScript so the
+// frontends can echo it back in the X-CSRF-Token header (double-submit).
+function csrfCookieOptions() {
+  return {
+    httpOnly: false,
+    secure: env.cookieSecure,
+    sameSite: env.cookieSameSite,
+    path: '/',
+    maxAge: refreshTokenMaxAgeMs()
+  }
+}
+
+export function generateCsrfToken() {
+  return randomBytes(24).toString('hex')
 }
 
 export function accessTokenMaxAgeMs() {
@@ -30,13 +47,16 @@ export function refreshTokenMaxAgeMs() {
 export function setAuthCookies(res, { accessToken, refreshToken }) {
   res.cookie(ACCESS_COOKIE, accessToken, baseCookieOptions(accessTokenMaxAgeMs()))
   res.cookie(REFRESH_COOKIE, refreshToken, baseCookieOptions(refreshTokenMaxAgeMs()))
+  res.cookie(CSRF_COOKIE, generateCsrfToken(), csrfCookieOptions())
 }
 
 export function setRefreshCookie(res, refreshToken) {
   res.cookie(REFRESH_COOKIE, refreshToken, baseCookieOptions(refreshTokenMaxAgeMs()))
+  res.cookie(CSRF_COOKIE, generateCsrfToken(), csrfCookieOptions())
 }
 
 export function clearAuthCookies(res) {
   res.clearCookie(ACCESS_COOKIE, { path: '/' })
   res.clearCookie(REFRESH_COOKIE, { path: '/' })
+  res.clearCookie(CSRF_COOKIE, { path: '/' })
 }

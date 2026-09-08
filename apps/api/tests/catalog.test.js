@@ -9,6 +9,9 @@ import {
   createProduct,
   slugify
 } from '../src/modules/catalog/catalog.service.js'
+import { adjustStock } from '../src/modules/inventory/stock.service.js'
+import StockMovement from '../src/modules/inventory/stock.movement.model.js'
+import Inventory from '../src/modules/inventory/inventory.model.js'
 
 describe('public catalog', () => {
   let request
@@ -18,6 +21,7 @@ describe('public catalog', () => {
   let categorySlug
   let brandId
   let product
+  let bakeware
   let expensive
   let draft
   let featured
@@ -34,6 +38,23 @@ describe('public catalog', () => {
     })
     categoryId = child.id
     categorySlug = child.slug
+
+    // A sibling branch under the same parent; used to prove category browsing
+    // never leaks products from branches that only share an ancestor.
+    const sibling = await createCategory({
+      name: 'Bakeware',
+      status: 'active',
+      parentId: parent.id
+    })
+    bakeware = await createProduct({
+      name: 'Stone Baking Tray',
+      sku: 'BAKEWARE-01',
+      priceMinor: 2200,
+      stock: 2,
+      brandId,
+      categoryId: sibling.id,
+      status: 'published'
+    })
 
     product = await createProduct({
       name: 'Nebula Skillet',
@@ -93,7 +114,7 @@ describe('public catalog', () => {
     expect(slugs).toContain(product.slug)
     expect(slugs).toContain(expensive.slug)
     expect(slugs).not.toContain(draft.slug)
-    expect(res.body.data.meta.totalItems).toBe(2)
+    expect(res.body.data.meta.totalItems).toBe(3)
   })
 
   it('filters by category slug', async () => {
@@ -106,10 +127,29 @@ describe('public catalog', () => {
     expect(slugs).toContain(expensive.slug)
   })
 
+  it('never leaks sibling-branch products when filtering by category', async () => {
+    const res = await request
+      .get('/api/v1/catalog/products')
+      .query({ category: categorySlug, pageSize: 50 })
+    const slugs = res.body.data.items.map((item) => item.slug)
+    expect(slugs).not.toContain(bakeware.slug)
+  })
+
+  it('includes descendant products when filtering by a parent category', async () => {
+    const parentRes = await request.get('/api/v1/catalog/categories')
+    const home = parentRes.body.data.items.find((category) => category.slug === 'home-kitchen')
+    const res = await request
+      .get('/api/v1/catalog/products')
+      .query({ category: home.slug, pageSize: 50 })
+    const slugs = res.body.data.items.map((item) => item.slug)
+    expect(slugs).toContain(product.slug)
+    expect(slugs).toContain(bakeware.slug)
+  })
+
   it('filters by brand slug and returns only matching items', async () => {
     const res = await request.get('/api/v1/catalog/products').query({ brand: 'acme-gear' })
     expect(res.status).toBe(200)
-    expect(res.body.data.meta.totalItems).toBe(2)
+    expect(res.body.data.meta.totalItems).toBe(3)
   })
 
   it('filters by price range', async () => {
@@ -133,7 +173,7 @@ describe('public catalog', () => {
     const res = await request.get('/api/v1/catalog/products').query({ page: 1, pageSize: 1 })
     expect(res.status).toBe(200)
     expect(res.body.data.items).toHaveLength(1)
-    expect(res.body.data.meta.totalPages).toBe(2)
+    expect(res.body.data.meta.totalPages).toBe(3)
   })
 
   it('exposes product summaries with money and stock info', async () => {
@@ -218,5 +258,41 @@ describe('public catalog', () => {
   it('returns 404 for an unknown category slug', async () => {
     const res = await request.get('/api/v1/catalog/categories/nope')
     expect(res.status).toBe(404)
+  })
+
+  it('rejects manual stock adjustments with order-lifecycle reasons', async () => {
+    await expect(
+      adjustStock(product.id, {
+        delta: 1,
+        reason: 'order_placed',
+        note: 'forged',
+        actorUserId: null
+      })
+    ).rejects.toMatchObject({ code: 'INVALID_ADJUSTMENT_REASON' })
+
+    const row = await Inventory.findOne({ productId: product.id, variantId: null })
+    expect(row?.stock ?? product.stock ?? 0).toBe(6)
+    const forged = await StockMovement.countDocuments({
+      productId: product.id,
+      note: 'forged'
+    })
+    expect(forged).toBe(0)
+  })
+
+  it('records a restock movement for a valid manual adjustment', async () => {
+    await adjustStock(product.id, {
+      delta: 2,
+      reason: 'restock',
+      note: 'supplier delivery',
+      actorUserId: null
+    })
+    const row = await Inventory.findOne({ productId: product.id, variantId: null })
+    expect(row.stock).toBe(8)
+    const movement = await StockMovement.findOne({
+      productId: product.id,
+      note: 'supplier delivery'
+    })
+    expect(movement.reason).toBe('restock')
+    expect(movement.change).toBe(2)
   })
 })

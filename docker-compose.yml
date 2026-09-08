@@ -1,5 +1,24 @@
 name: voltify
 
+# API runtime + seed container environment. Keep in sync with apps/api/src/config/env.js.
+# Values may be overridden from a root .env via compose ${VAR} interpolation.
+x-api-env: &api-env
+  NODE_ENV: production
+  PORT: "4000"
+  MONGODB_URI: mongodb://mongo:27017/ecommerce
+  MEDIA_UPLOAD_DIR: /data/uploads
+  STORE_URL: http://localhost:3000
+  ADMIN_URL: http://localhost:3001
+  CORS_ORIGINS: http://localhost:3000,http://localhost:3001,https://*.monkeycode-ai.live,http://*.monkeycode-ai.live
+  # Tokens below must be overridden with long random secrets in real deploys
+  # (set ACCESS_TOKEN_SECRET / REFRESH_TOKEN_SECRET in the root .env).
+  ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:-change-me-access-token-secret-min-32-chars}
+  REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-change-me-refresh-token-secret-min-32-chars}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  # Super-admin bootstrap credentials used by the seed:admin script.
+  ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+  ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin1234!}
+
 services:
   mongo:
     image: mongo:7
@@ -18,18 +37,7 @@ services:
       context: .
       target: api
     restart: unless-stopped
-    environment:
-      NODE_ENV: production
-      PORT: "4000"
-      MONGODB_URI: mongodb://mongo:27017/ecommerce
-      MEDIA_UPLOAD_DIR: /data/uploads
-      STORE_URL: http://localhost:3000
-      ADMIN_URL: http://localhost:3001
-      # Tokens below must be overridden with long random secrets in real deploys.
-      ACCESS_TOKEN_SECRET: ${ACCESS_TOKEN_SECRET:-change-me-access-token-secret-min-32-chars}
-      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:-change-me-refresh-token-secret-min-32-chars}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
-      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+    environment: *api-env
     volumes:
       - media-data:/data/uploads
     ports:
@@ -38,7 +46,7 @@ services:
       mongo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:4000/api/v1/health"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/v1/health').then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -48,21 +56,41 @@ services:
     build:
       context: .
       target: storefront
+      # NEXT_PUBLIC_* values are inlined into client bundles during `next build`,
+      # so they must arrive as build args, not as runtime environment. Values are
+      # per-service: storefront's public origin differs from admin's.
+      args:
+        NEXT_PUBLIC_API_BASE: /api/v1
+        NEXT_PUBLIC_SITE_URL: http://localhost:3000
+        API_PROXY_TARGET: http://api:4000
     restart: unless-stopped
     environment:
       NODE_ENV: production
       API_PROXY_TARGET: http://api:4000
-      NEXT_PUBLIC_SITE_URL: http://localhost:3000
+      # Server Components (home/categories read API_BASE_URL; sitemap/product
+      # metadata read API_INTERNAL_URL) must reach the API container, not localhost.
+      API_BASE_URL: http://api:4000/api/v1
+      API_INTERNAL_URL: http://api:4000/api/v1
     ports:
       - "3000:3000"
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health').then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   admin:
     build:
       context: .
       target: admin
+      args:
+        NEXT_PUBLIC_API_BASE: /api/v1
+        NEXT_PUBLIC_SITE_URL: http://localhost:3001
+        API_PROXY_TARGET: http://api:4000
     restart: unless-stopped
     environment:
       NODE_ENV: production
@@ -72,6 +100,25 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/api/v1/health').then((r)=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # One-shot DB seed: docker compose --profile seed run --rm seed
+  seed:
+    build:
+      context: .
+      target: api
+    profiles: ["seed"]
+    restart: "no"
+    environment: *api-env
+    depends_on:
+      mongo:
+        condition: service_healthy
+    command: ["sh", "-c", "npm run seed:admin && npm run seed:products"]
 
 volumes:
   mongo-data:

@@ -2,7 +2,6 @@ import { Router } from 'express'
 
 import { authLimiter } from '../../config/rateLimit.js'
 import { requireAuth } from '../../middlewares/auth.js'
-import { csrfProtection } from '../../middlewares/csrf.js'
 import { validateBody, validateParams } from '../../middlewares/validate.js'
 import {
   registerSchema,
@@ -34,9 +33,6 @@ import {
 } from './auth.controller.js'
 
 const authRouter = Router()
-
-// CSRF guard for cookie-authenticated unsafe methods
-authRouter.use(csrfProtection)
 
 authRouter.post('/register', authLimiter(), validateBody(registerSchema), registerHandler)
 authRouter.post('/verify-email', authLimiter(), validateBody(verifyEmailSchema), verifyEmailHandler)

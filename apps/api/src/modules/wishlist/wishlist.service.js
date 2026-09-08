@@ -78,11 +78,38 @@ export async function removeFromWishlist(userId, productId) {
   return { itemCount: wishlist.items.length }
 }
 
-export async function moveWishlistItemToCart(userId, productId, addToCartFn) {
+export async function moveWishlistItemToCart(userId, productId, { variantId } = {}, addToCartFn) {
   const wishlist = await wishlistFor(userId)
   const item = wishlist.items.find((entry) => entry.productId.toString() === productId.toString())
   if (!item) throw new NotFoundError('Item not in wishlist', 'NOT_IN_WISHLIST')
-  const cart = await addToCartFn({ productId, quantity: 1 })
+
+  const product = await Product.findOne({
+    _id: productId,
+    status: ProductStatuses.PUBLISHED
+  }).lean()
+  if (!product) throw new NotFoundError('Product not found', 'PRODUCT_NOT_FOUND')
+
+  let resolvedVariantId = variantId ?? null
+  const activeVariants = (product.variants ?? []).filter((entry) => entry.active)
+  if (activeVariants.length > 0) {
+    if (resolvedVariantId) {
+      const variant = activeVariants.find(
+        (entry) => entry._id.toString() === resolvedVariantId.toString()
+      )
+      if (!variant) {
+        throw new BadRequestError('Selected option is unavailable', 'VARIANT_NOT_FOUND')
+      }
+    } else if (activeVariants.length === 1) {
+      resolvedVariantId = activeVariants[0]._id
+    } else {
+      throw new BadRequestError(
+        'This product has multiple options. Choose an option to move it to cart.',
+        'VARIANT_REQUIRED'
+      )
+    }
+  }
+
+  const cart = await addToCartFn({ productId, variantId: resolvedVariantId, quantity: 1 })
   wishlist.items = wishlist.items.filter(
     (entry) => entry.productId.toString() !== productId.toString()
   )

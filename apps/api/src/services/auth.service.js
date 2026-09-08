@@ -19,6 +19,7 @@ import { issueOtp, verifyOtp } from '../services/otp.service.js'
 import { sendPasswordChangedNotification } from '../services/mailer.service.js'
 import {
   AuthenticationError,
+  BadRequestError,
   ConflictError,
   ValidationError,
   NotFoundError
@@ -205,8 +206,9 @@ export async function updateMe(userId, { name, avatarUrl }) {
   return { user: toPublicUser(user) }
 }
 
-export async function listSessions(userId) {
+export async function listSessions(userId, currentSessionId = null) {
   const sessions = await listUserSessions(userId)
+  const current = currentSessionId ? String(currentSessionId) : null
   return {
     sessions: sessions.map((session) => ({
       id: session._id.toString(),
@@ -215,12 +217,19 @@ export async function listSessions(userId) {
       ip: session.ip,
       createdAt: session.createdAt,
       lastUsedAt: session.lastUsedAt,
-      expiresAt: session.expiresAt
+      expiresAt: session.expiresAt,
+      current: current ? session._id.toString() === current : false
     }))
   }
 }
 
-export async function removeSession(userId, sessionId) {
+export async function removeSession(userId, sessionId, currentSessionId = null) {
+  if (currentSessionId && String(sessionId) === String(currentSessionId)) {
+    throw new BadRequestError(
+      'You cannot revoke the session on this device; sign out instead',
+      'CURRENT_SESSION'
+    )
+  }
   const session = await revokeSession(userId, sessionId, 'revoked')
   if (!session) {
     throw new NotFoundError('Session not found', 'SESSION_NOT_FOUND')

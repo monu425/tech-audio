@@ -86,6 +86,7 @@ export const StockMovementReasons = {
   MANUAL_ADJUSTMENT: 'manual_adjustment',
   ORDER_PLACED: 'order_placed',
   ORDER_CANCELLED: 'order_cancelled',
+  ORDER_DELIVERED: 'order_delivered',
   RETURN: 'return',
   RESTOCK: 'restock'
 } as const

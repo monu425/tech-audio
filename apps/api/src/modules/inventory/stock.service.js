@@ -122,30 +122,111 @@ export async function reserveVariantStock(productId, variantId, quantity, refere
   return { availableStock: updated.stock - updated.reserved }
 }
 
-// Releases a previously reserved quantity (order cancel/refund path).
+// Releases a previously reserved quantity (order cancel/refund path). The
+// decrement is guarded by `reserved >= quantity` so concurrent releases can
+// never drive `reserved` negative.
 export async function releaseReservation(productId, variantId, quantity, reference, actorUserId) {
   const variant = variantId ? { _id: new Types.ObjectId(variantId) } : null
+  const amount = Math.max(0, Math.round(quantity))
+  if (amount === 0) return
+
   const row = await ensureInventoryRow(productId, variant)
-  await Inventory.updateOne(
-    { _id: row._id },
-    { $inc: { reserved: -Math.max(0, Math.min(quantity, row.reserved)) } }
+  const updated = await Inventory.findOneAndUpdate(
+    { _id: row._id, reserved: { $gte: amount } },
+    { $inc: { reserved: -amount } },
+    { returnDocument: 'after' }
   )
-  await syncProductReserved(productId, variant, -Math.max(0, Math.min(quantity, row.reserved)))
+  if (!updated) return
+
+  await syncProductReserved(productId, variant, -amount)
   await recordMovement({
     productId,
     variantId: variantId ?? null,
-    change: Math.max(0, Math.min(quantity, row.reserved)),
+    change: amount,
     reason: StockMovementReasons.ORDER_CANCELLED,
     reference,
     actorUserId
   })
 }
 
-// Admin/manual stock adjustment at product or variant level.
+// Atomically finalizes a previously reserved quantity once the goods leave the
+// warehouse (order delivered): stock drops by the committed amount and the
+// reservation is cleared, keeping availableStock unchanged.
+export async function commitReservation(productId, variantId, quantity, reference, actorUserId) {
+  const variant = variantId ? { _id: new Types.ObjectId(variantId) } : null
+  const row = await ensureInventoryRow(productId, variant)
+  const amount = Math.max(0, Math.min(quantity, row.reserved, row.stock))
+  if (amount === 0) return
+
+  await Inventory.updateOne({ _id: row._id }, { $inc: { stock: -amount, reserved: -amount } })
+  if (variant) {
+    await Product.updateOne(
+      { _id: productId, 'variants._id': variant._id },
+      { $inc: { 'variants.$[entry].stock': -amount, 'variants.$[entry].reserved': -amount } },
+      { arrayFilters: [{ 'entry._id': variant._id }] }
+    )
+  } else {
+    await Product.updateOne({ _id: productId }, { $inc: { stock: -amount, reserved: -amount } })
+  }
+  await recordMovement({
+    productId,
+    variantId: variantId ?? null,
+    change: -amount,
+    reason: StockMovementReasons.ORDER_DELIVERED,
+    reference,
+    actorUserId
+  })
+}
+
+// Restores committed stock when goods are physically returned.
+export async function restoreCommittedStock(
+  productId,
+  variantId,
+  quantity,
+  reference,
+  actorUserId
+) {
+  const variant = variantId ? { _id: new Types.ObjectId(variantId) } : null
+  const row = await ensureInventoryRow(productId, variant)
+  const amount = Math.max(0, Math.round(quantity))
+  if (amount === 0) return
+
+  await Inventory.updateOne({ _id: row._id }, { $inc: { stock: amount } })
+  if (variant) {
+    await Product.updateOne(
+      { _id: productId, 'variants._id': variant._id },
+      { $inc: { 'variants.$[entry].stock': amount } },
+      { arrayFilters: [{ 'entry._id': variant._id }] }
+    )
+  } else {
+    await Product.updateOne({ _id: productId }, { $inc: { stock: amount } })
+  }
+  await recordMovement({
+    productId,
+    variantId: variantId ?? null,
+    change: amount,
+    reason: StockMovementReasons.RETURN,
+    reference,
+    actorUserId
+  })
+}
+
+// Admin/manual stock adjustment at product or variant level. Only reasons that
+// describe an explicit operator action are permitted; order-lifecycle reasons
+// (placed/delivered/cancelled/return) are produced exclusively by the system so
+// the ledger stays truthful about what actually moved stock.
+const MANUAL_ADJUST_REASONS = new Set([
+  StockMovementReasons.MANUAL_ADJUSTMENT,
+  StockMovementReasons.RESTOCK
+])
+
 export async function adjustStock(
   productId,
   { variantId, delta, reason = StockMovementReasons.MANUAL_ADJUSTMENT, note, actorUserId }
 ) {
+  if (!MANUAL_ADJUST_REASONS.has(reason)) {
+    throw new BadRequestError('Unsupported adjustment reason', 'INVALID_ADJUSTMENT_REASON')
+  }
   const variant = variantId ? { _id: new Types.ObjectId(variantId) } : null
   const row = await ensureInventoryRow(productId, variant)
   await Inventory.updateOne(

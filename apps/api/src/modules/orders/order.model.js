@@ -14,7 +14,7 @@ const orderLineSchema = new mongoose.Schema(
     quantity: { type: Number, required: true, min: 1 },
     lineTotalMinor: { type: Number, required: true, min: 0 }
   },
-  { _id: false, versionKey: false }
+  { versionKey: false }
 )
 
 const addressSnapshotSchema = new mongoose.Schema(
@@ -89,7 +89,8 @@ const orderSchema = new mongoose.Schema(
     notes: { type: String, trim: true, maxlength: 1000, default: null },
     timeline: { type: [timelineEventSchema], default: [] },
     cancelledAt: { type: Date, default: null },
-    paidAt: { type: Date, default: null }
+    paidAt: { type: Date, default: null },
+    couponReleasedAt: { type: Date, default: null }
   },
   { timestamps: true, versionKey: false }
 )

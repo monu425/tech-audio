@@ -26,6 +26,7 @@ const cartSchema = new mongoose.Schema(
     },
     items: { type: [cartItemSchema], default: [] },
     couponCode: { type: String, trim: true, uppercase: true, maxlength: 40, default: null },
+    processingAt: { type: Date, default: null },
     expiresAt: { type: Date, default: null }
   },
   { timestamps: true, versionKey: false }

@@ -3,7 +3,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 
-import { getJson } from '@/lib/api'
+import { getJson, postJson } from '@/lib/api'
 import type { SessionMe } from '@/lib/admin-types'
 
 export const PERMISSIONS = {
@@ -24,7 +24,8 @@ export const PERMISSIONS = {
   REVIEW_MODERATE: 'review.moderate',
   REPORT_READ: 'report.read',
   SETTINGS_MANAGE: 'settings.manage',
-  ADMIN_MANAGE: 'admin.manage'
+  ADMIN_MANAGE: 'admin.manage',
+  AUDIT_READ: 'audit.read'
 } as const
 
 type SessionContextValue = {
@@ -66,7 +67,7 @@ export function SessionProvider({ children }: { children: React.ReactNode }) {
       hasPermission: (permission) => permissions.includes(permission),
       signOut: async () => {
         try {
-          await fetch('/api/v1/auth/logout', { method: 'POST', credentials: 'include' })
+          await postJson('/auth/logout')
         } catch {
           // ignore network errors during logout
         }

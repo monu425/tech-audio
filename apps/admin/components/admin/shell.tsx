@@ -18,6 +18,7 @@ import {
   Store,
   Tags,
   TicketPercent,
+  ScrollText,
   Users,
   X
 } from 'lucide-react'
@@ -124,6 +125,12 @@ const NAV_GROUPS: NavGroup[] = [
         label: 'Staff & roles',
         icon: ShieldCheck,
         permission: PERMISSIONS.ADMIN_MANAGE
+      },
+      {
+        href: '/audit',
+        label: 'Audit logs',
+        icon: ScrollText,
+        permission: PERMISSIONS.AUDIT_READ
       },
       {
         href: '/settings',

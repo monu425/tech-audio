@@ -23,48 +23,60 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { getJson, postJson, deleteJson, ApiError, isApiError } from '@/lib/api'
 import { formatMoney, formatStockStatus } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import type { ProductDetail, ProductSummary, ReviewsListData } from '@/lib/store-types'
+import type {
+  PaginationMeta,
+  ProductDetail,
+  ProductSummary,
+  Review,
+  ReviewsListData
+} from '@/lib/store-types'
 
 export function ProductDetailView({ slug }: { slug: string }) {
   const router = useRouter()
   const cart = useCart()
   const [product, setProduct] = useState<ProductDetail | null>(null)
-  const [reviews, setReviews] = useState<ReviewsListData | null>(null)
   const [related, setRelated] = useState<ProductSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedVariantId, setSelectedVariantId] = useState<string | null>(null)
+  const [activeImage, setActiveImage] = useState(0)
   const [quantity, setQuantity] = useState(1)
   const [wishlisted, setWishlisted] = useState(false)
   const [busy, setBusy] = useState(false)
   const [signedIn, setSignedIn] = useState<boolean | null>(null)
-  const [reviewsVersion, setReviewsVersion] = useState(0)
   const [activeTab, setActiveTab] = useState<'description' | 'attributes' | 'reviews'>(
     'description'
   )
 
   useEffect(() => {
-    getJson<{ user: unknown }>('/auth/me')
-      .then(() => setSignedIn(true))
-      .catch(() => setSignedIn(false))
-  }, [])
-
-  const loadReviews = useCallback(() => {
     let active = true
-    getJson<ReviewsListData>(`/catalog/products/${encodeURIComponent(slug)}/reviews?pageSize=8`)
-      .then((data) => {
-        if (active) setReviews(data)
-      })
-      .catch(() => {
-        if (active) setReviews(null)
-      })
+    async function syncWishlistState() {
+      let authed = false
+      try {
+        await getJson<{ user: unknown }>('/auth/me')
+        authed = true
+      } catch {
+        authed = false
+      }
+      if (!active) return
+      setSignedIn(authed)
+      if (authed && product) {
+        try {
+          const data = await getJson<{ items: Array<{ product: { id: string } }> }>('/wishlist')
+          if (active && data.items.some((item) => item.product.id === product.id)) {
+            setWishlisted(true)
+          }
+        } catch {
+          // Wishlist is best-effort; ignore lookup failures.
+        }
+      }
+    }
+    void syncWishlistState()
     return () => {
       active = false
     }
-  }, [slug])
-
-  useEffect(() => loadReviews(), [loadReviews, reviewsVersion])
+  }, [product])
 
   useEffect(() => {
     let active = true
@@ -73,6 +85,7 @@ export function ProductDetailView({ slug }: { slug: string }) {
       .then((data) => {
         if (!active) return
         setProduct(data)
+        setActiveImage(0)
         const initial = data.hasVariants
           ? (data.variants.find((variant) => variant.active) ?? null)
           : null
@@ -227,10 +240,10 @@ export function ProductDetailView({ slug }: { slug: string }) {
         {/* Gallery */}
         <div>
           <div className="relative aspect-square overflow-hidden rounded-2xl border bg-muted">
-            {product.images[0] ? (
+            {product.images[activeImage] ? (
               <Image
-                src={product.images[0].url}
-                alt={product.images[0].alt ?? product.name}
+                src={product.images[activeImage].url}
+                alt={product.images[activeImage].alt ?? product.name}
                 fill
                 priority
                 sizes="(max-width: 1024px) 100vw, 50vw"
@@ -245,11 +258,15 @@ export function ProductDetailView({ slug }: { slug: string }) {
           {product.images.length > 1 ? (
             <div className="mt-3 flex gap-3 overflow-x-auto pb-1">
               {product.images.map((image, index) => (
-                <div
+                <button
                   key={image.url}
+                  type="button"
+                  aria-label={`View image ${index + 1} of ${product.images.length}`}
+                  aria-current={index === activeImage}
+                  onClick={() => setActiveImage(index)}
                   className={cn(
-                    'relative aspect-square w-20 shrink-0 cursor-pointer overflow-hidden rounded-lg border',
-                    index === 0 ? 'ring-2 ring-ring' : ''
+                    'relative aspect-square w-20 shrink-0 cursor-pointer overflow-hidden rounded-lg border transition-opacity',
+                    index === activeImage ? 'ring-2 ring-ring' : 'opacity-70 hover:opacity-100'
                   )}
                 >
                   <Image
@@ -259,7 +276,7 @@ export function ProductDetailView({ slug }: { slug: string }) {
                     sizes="80px"
                     className="object-cover"
                   />
-                </div>
+                </button>
               ))}
             </div>
           ) : null}
@@ -472,12 +489,7 @@ export function ProductDetailView({ slug }: { slug: string }) {
             ))}
 
           {activeTab === 'reviews' && (
-            <ReviewsSection
-              productId={product.id}
-              signedIn={signedIn}
-              data={reviews}
-              onAdded={() => setReviewsVersion((version) => version + 1)}
-            />
+            <ReviewsSection productId={product.id} signedIn={signedIn} slug={slug} />
           )}
         </div>
       </div>
@@ -572,34 +584,117 @@ function TrustBadge({
 function ReviewsSection({
   productId,
   signedIn,
-  data,
-  onAdded
+  slug
 }: {
   productId: string
   signedIn: boolean | null
-  data: ReviewsListData | null
-  onAdded: () => void
+  slug: string
 }) {
-  const [visible, setVisible] = useState(8)
-  const items = data?.items ?? []
+  const [items, setItems] = useState<Review[]>([])
+  const [ratingSummary, setRatingSummary] = useState<{ average: number; count: number } | null>(
+    null
+  )
+  const [meta, setMeta] = useState<PaginationMeta | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  const reload = useCallback(async () => {
+    try {
+      const data = await getJson<ReviewsListData>(
+        `/catalog/products/${encodeURIComponent(slug)}/reviews?pageSize=8`
+      )
+      setItems(data.items)
+      setMeta(data.meta)
+      setRatingSummary(data.ratingSummary)
+      setFailed(false)
+    } catch {
+      setItems([])
+      setMeta(null)
+      setRatingSummary(null)
+      setFailed(true)
+    } finally {
+      setLoading(false)
+    }
+  }, [slug])
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      try {
+        const data = await getJson<ReviewsListData>(
+          `/catalog/products/${encodeURIComponent(slug)}/reviews?pageSize=8`
+        )
+        if (cancelled) return
+        setItems(data.items)
+        setMeta(data.meta)
+        setRatingSummary(data.ratingSummary)
+      } catch {
+        if (cancelled) return
+        setItems([])
+        setMeta(null)
+        setRatingSummary(null)
+        setFailed(true)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    void load()
+    return () => {
+      cancelled = true
+    }
+  }, [slug])
+
+  function handleReload() {
+    setFailed(false)
+    void reload()
+  }
+
+  async function showMore() {
+    if (!meta || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const data = await getJson<ReviewsListData>(
+        `/catalog/products/${encodeURIComponent(slug)}/reviews?page=${meta.page + 1}&pageSize=8`
+      )
+      setItems((current) => [...current, ...data.items])
+      setMeta(data.meta)
+      setRatingSummary(data.ratingSummary)
+    } catch {
+      // Keep the current list; the button simply stays available to retry.
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  const totalItems = meta?.totalItems ?? ratingSummary?.count ?? 0
+
   return (
     <div className="space-y-6" id="reviews">
-      <ReviewForm productId={productId} signedIn={signedIn} onAdded={onAdded} />
-      {data && data.meta.totalItems > 0 ? (
+      <ReviewForm productId={productId} signedIn={signedIn} onAdded={handleReload} />
+      {loading ? (
+        <p className="rounded-xl border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+          Loading reviews…
+        </p>
+      ) : failed ? (
+        <p className="rounded-xl border bg-muted/30 p-6 text-center text-sm text-muted-foreground">
+          Reviews could not be loaded right now.
+        </p>
+      ) : totalItems > 0 ? (
         <div>
-          {data.summary ? (
+          {ratingSummary ? (
             <div className="mb-4 flex items-center gap-4">
               <span className="text-4xl font-bold tabular-nums">
-                {Number(data.summary.average).toFixed(1)}
+                {Number(ratingSummary.average).toFixed(1)}
               </span>
               <div>
-                <RatingStars value={data.summary.average} size="size-4" />
-                <p className="mt-1 text-sm text-muted-foreground">{data.meta.totalItems} reviews</p>
+                <RatingStars value={ratingSummary.average} size="size-4" />
+                <p className="mt-1 text-sm text-muted-foreground">{ratingSummary.count} reviews</p>
               </div>
             </div>
           ) : null}
           <div className="space-y-4">
-            {items.slice(0, visible).map((review) => (
+            {items.map((review) => (
               <article key={review.id} className="rounded-xl border p-5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
@@ -607,7 +702,8 @@ function ReviewsSection({
                     <span className="text-sm font-semibold">{review.title ?? 'Review'}</span>
                   </div>
                   <span className="text-xs text-muted-foreground">
-                    {review.userName} · {new Date(review.createdAt).toLocaleDateString()}
+                    {review.user?.name ?? 'Customer'} ·{' '}
+                    {new Date(review.createdAt).toLocaleDateString()}
                   </span>
                 </div>
                 {review.body ? (
@@ -616,13 +712,14 @@ function ReviewsSection({
               </article>
             ))}
           </div>
-          {visible < data.meta.totalItems ? (
+          {items.length < totalItems ? (
             <Button
               variant="outline"
               className="mt-4"
-              onClick={() => setVisible((current) => current + 8)}
+              onClick={() => void showMore()}
+              disabled={loadingMore}
             >
-              Show more reviews
+              {loadingMore ? 'Loading…' : 'Show more reviews'}
             </Button>
           ) : null}
         </div>

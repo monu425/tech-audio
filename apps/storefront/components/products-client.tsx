@@ -99,10 +99,10 @@ export function ProductsClient() {
     query.q || query.category || query.brands.length || query.onSale || query.inStock
   )
 
+  // The catalogue API filters by a single brand slug; the facet mirrors that
+  // as single-select rather than silently returning an empty result set.
   function toggleBrand(slug: string) {
-    const brands = query.brands.includes(slug)
-      ? query.brands.filter((item) => item !== slug)
-      : [...query.brands, slug]
+    const brands = query.brands[0] === slug ? [] : [slug]
     buildParams({ brands, page: 1 })
   }
 
@@ -250,20 +250,31 @@ export function ProductsClient() {
           {facets?.brands?.length ? (
             <FilterSection title="Brand">
               <ul className="space-y-2 text-sm">
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => buildParams({ brands: [], page: 1 })}
+                    className={cn(
+                      'hover:underline',
+                      query.brands.length === 0 ? 'font-semibold' : 'text-muted-foreground'
+                    )}
+                  >
+                    All brands
+                  </button>
+                </li>
                 {facets.brands.map((item) => (
                   <li key={item.slug}>
                     <label className="flex cursor-pointer items-center justify-between gap-2">
                       <span className="flex items-center gap-2">
                         <input
-                          type="checkbox"
-                          className="size-4 rounded border"
-                          checked={query.brands.includes(item.slug)}
+                          type="radio"
+                          name="brand"
+                          className="size-4"
+                          checked={query.brands[0] === item.slug}
                           onChange={() => toggleBrand(item.slug)}
                         />
                         <span
-                          className={cn(
-                            !query.brands.includes(item.slug) && 'text-muted-foreground'
-                          )}
+                          className={cn(query.brands[0] !== item.slug && 'text-muted-foreground')}
                         >
                           {item.name}
                         </span>

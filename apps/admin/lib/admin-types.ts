@@ -305,3 +305,21 @@ export interface PlatformSettings {
   currency: string
   shippingMethods: { id: string; name: string; description: string; estimatedDays: string }[]
 }
+
+export interface AuditLogEntry {
+  id: string
+  actorId: string | null
+  actorName: string | null
+  actorRole: string | null
+  action: string
+  resource: string | null
+  resourceId: string | null
+  method: string | null
+  path: string | null
+  status: number
+  summary: string | null
+  meta: Record<string, unknown>
+  ip: string | null
+  userAgent: string | null
+  createdAt: string
+}

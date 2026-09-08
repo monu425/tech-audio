@@ -236,7 +236,7 @@ describe('auth flows', () => {
   })
 
   describe('sessions management', () => {
-    it('lists sessions and can revoke them', async () => {
+    it('lists sessions, revokes others, and protects the active session', async () => {
       const email = makeEmail('sessions')
       const { jar } = await verifiedAgent(email)
 
@@ -249,6 +249,43 @@ describe('auth flows', () => {
       const list = await jar.get('/api/v1/auth/sessions')
       expect(list.status).toBe(200)
       expect(list.body.data.sessions).toHaveLength(2)
+      const currentId = list.body.data.sessions.find((s) => s.current).id
+      const otherId = list.body.data.sessions.find((s) => !s.current).id
+      expect(currentId).toBeTruthy()
+      expect(otherId).toBeTruthy()
+
+      // Revoking a non-active session succeeds and drops it from the list
+      const removed = await jar
+        .delete(`/api/v1/auth/sessions/${otherId}`)
+        .set('Origin', STORE_ORIGIN)
+      expect(removed.status).toBe(200)
+
+      const after = await jar.get('/api/v1/auth/sessions')
+      expect(after.status).toBe(200)
+      expect(after.body.data.sessions).toHaveLength(1)
+      expect(after.body.data.sessions[0].id).toBe(currentId)
+
+      // The active session itself cannot be revoked via this endpoint
+      const guard = await jar
+        .delete(`/api/v1/auth/sessions/${currentId}`)
+        .set('Origin', STORE_ORIGIN)
+      expect(guard.status).toBe(400)
+      expect(guard.body.error.code).toBe('CURRENT_SESSION')
+
+      const stillActive = await jar.get('/api/v1/auth/sessions')
+      expect(stillActive.status).toBe(200)
+      expect(stillActive.body.data.sessions).toHaveLength(1)
+    })
+
+    it('revokes all other sessions', async () => {
+      const email = makeEmail('sessions-revoke-others')
+      const { jar } = await verifiedAgent(email)
+
+      const second = await request.post('/api/v1/auth/login').send({
+        email,
+        password: 'Strong123'
+      })
+      expect(second.status).toBe(200)
 
       const revokeOthers = await jar
         .post('/api/v1/auth/sessions/revoke-others')
@@ -258,14 +295,7 @@ describe('auth flows', () => {
       const afterRevoke = await jar.get('/api/v1/auth/sessions')
       expect(afterRevoke.status).toBe(200)
       expect(afterRevoke.body.data.sessions).toHaveLength(1)
-
-      const removed = await jar
-        .delete(`/api/v1/auth/sessions/${afterRevoke.body.data.sessions[0].id}`)
-        .set('Origin', STORE_ORIGIN)
-      expect(removed.status).toBe(200)
-
-      const after = await jar.get('/api/v1/auth/sessions')
-      expect(after.status).toBe(401)
+      expect(afterRevoke.body.data.sessions[0].current).toBe(true)
     })
   })
 
@@ -283,6 +313,58 @@ describe('auth flows', () => {
           currentPassword: 'Strong123',
           newPassword: 'Strong1234',
           confirmPassword: 'Strong1234'
+        })
+      expect(res.status).toBe(403)
+      expect(res.body.error.code).toBe('CSRF_BLOCKED')
+    })
+
+    it('issues a non-httpOnly csrf_token cookie alongside auth cookies', async () => {
+      const res = await request.post('/api/v1/auth/login').send({
+        email: 'jane@example.com',
+        password: 'Strong123'
+      })
+      expect(res.status).toBe(200)
+      const csrfCookie = res.headers['set-cookie'].find((c) => c.startsWith('csrf_token='))
+      expect(csrfCookie).toBeDefined()
+      expect(csrfCookie.toLowerCase()).not.toContain('httponly')
+    })
+
+    it('accepts a matching double-submit token regardless of origin', async () => {
+      const loginRes = await request.post('/api/v1/auth/login').send({
+        email: 'jane@example.com',
+        password: 'Strong123'
+      })
+      const cookies = loginRes.headers['set-cookie']
+      const csrf = /csrf_token=([^;]+)/.exec(cookies.join(';'))[1]
+      const cookieHeader = cookies.map((c) => c.split(';')[0]).join('; ')
+
+      const res = await request
+        .post('/api/v1/auth/change-password')
+        .set('Cookie', cookieHeader)
+        .set('Origin', 'https://evil.example.com')
+        .set('X-CSRF-Token', csrf)
+        .send({
+          currentPassword: 'Strong123',
+          newPassword: 'Strong1234',
+          confirmPassword: 'Strong1234'
+        })
+      expect(res.status).toBe(200)
+    })
+
+    it('rejects a mismatched token from an unknown origin', async () => {
+      const jar = supertest.agent(app)
+      await jar.post('/api/v1/auth/login').send({
+        email: 'jane@example.com',
+        password: 'Strong1234'
+      })
+      const res = await jar
+        .post('/api/v1/auth/change-password')
+        .set('Origin', 'https://evil.example.com')
+        .set('X-CSRF-Token', 'wrong-token')
+        .send({
+          currentPassword: 'Strong1234',
+          newPassword: 'Strong12345',
+          confirmPassword: 'Strong12345'
         })
       expect(res.status).toBe(403)
       expect(res.body.error.code).toBe('CSRF_BLOCKED')

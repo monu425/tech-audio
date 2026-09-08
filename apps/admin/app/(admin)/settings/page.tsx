@@ -5,6 +5,7 @@ import { Save } from 'lucide-react'
 
 import { getJson, patchJson } from '@/lib/api'
 import type { PlatformSettings } from '@/lib/admin-types'
+import { PERMISSIONS, useSession } from '@/lib/session'
 import { useAsync, errorMessage } from '@/components/admin/use-async'
 import { ErrorAlert, LoadingCard, PageHeader } from '@/components/admin/primitives'
 import { Button } from '@/components/ui/button'
@@ -12,7 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Field } from '@/components/ui/select'
 import { Input } from '@/components/ui/input'
 
-function SettingsForm({ data }: { data: PlatformSettings }) {
+function SettingsForm({ data, readOnly }: { data: PlatformSettings; readOnly: boolean }) {
   const [storeName, setStoreName] = React.useState(data.store.storeName)
   const [storeEmail, setStoreEmail] = React.useState(data.store.storeEmail)
   const [taxRatePercent, setTaxRatePercent] = React.useState(String(data.taxRatePercent ?? 0))
@@ -51,6 +52,11 @@ function SettingsForm({ data }: { data: PlatformSettings }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {readOnly ? (
+          <p className="mb-4 rounded-md border bg-muted/40 px-3 py-2 text-sm text-muted-foreground">
+            You have view-only access to these settings.
+          </p>
+        ) : null}
         <form onSubmit={save} className="space-y-4">
           {actionError ? <ErrorAlert message={actionError} className="mb-2" /> : null}
           <Field label="Store name *">
@@ -59,6 +65,7 @@ function SettingsForm({ data }: { data: PlatformSettings }) {
               onChange={(event) => setStoreName(event.target.value)}
               required
               minLength={2}
+              disabled={readOnly}
             />
           </Field>
           <Field label="Store email *">
@@ -67,6 +74,7 @@ function SettingsForm({ data }: { data: PlatformSettings }) {
               value={storeEmail}
               onChange={(event) => setStoreEmail(event.target.value)}
               required
+              disabled={readOnly}
             />
           </Field>
           <Field
@@ -80,14 +88,17 @@ function SettingsForm({ data }: { data: PlatformSettings }) {
               step="any"
               value={taxRatePercent}
               onChange={(event) => setTaxRatePercent(event.target.value)}
+              disabled={readOnly}
             />
           </Field>
-          <div className="flex items-center gap-3">
-            <Button type="submit" disabled={busy}>
-              <Save /> {busy ? 'Saving…' : 'Save settings'}
-            </Button>
-            {saved ? <span className="text-sm text-emerald-600">Saved successfully.</span> : null}
-          </div>
+          {!readOnly ? (
+            <div className="flex items-center gap-3">
+              <Button type="submit" disabled={busy}>
+                <Save /> {busy ? 'Saving…' : 'Save settings'}
+              </Button>
+              {saved ? <span className="text-sm text-emerald-600">Saved successfully.</span> : null}
+            </div>
+          ) : null}
         </form>
       </CardContent>
     </Card>
@@ -95,7 +106,9 @@ function SettingsForm({ data }: { data: PlatformSettings }) {
 }
 
 export default function SettingsPage() {
+  const session = useSession()
   const { data, loading, error } = useAsync<PlatformSettings>(() => getJson('/admin/settings'), [])
+  const readOnly = session.loading || !session.hasPermission(PERMISSIONS.SETTINGS_MANAGE)
 
   return (
     <>
@@ -107,7 +120,7 @@ export default function SettingsPage() {
         <ErrorAlert message={error} />
       ) : (
         <div className="grid gap-6 lg:grid-cols-3">
-          {data ? <SettingsForm data={data} /> : null}
+          {data ? <SettingsForm data={data} readOnly={readOnly} /> : null}
 
           <div className="space-y-6">
             <Card>

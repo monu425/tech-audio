@@ -172,7 +172,7 @@ export const updateMeHandler = async (req, res, next) => {
 
 export const sessionsHandler = async (req, res, next) => {
   try {
-    const data = await listSessions(req.user._id)
+    const data = await listSessions(req.user._id, req.auth?.sid)
     return sendSuccess(res, { message: 'Sessions fetched', data })
   } catch (err) {
     next(err)
@@ -181,7 +181,7 @@ export const sessionsHandler = async (req, res, next) => {
 
 export const revokeSessionHandler = async (req, res, next) => {
   try {
-    const data = await removeSession(req.user._id, req.params.sessionId)
+    const data = await removeSession(req.user._id, req.params.sessionId, req.auth?.sid)
     return sendSuccess(res, { message: 'Session revoked', data })
   } catch (err) {
     next(err)

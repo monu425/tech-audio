@@ -117,14 +117,22 @@ async function recomputeCartDoc(cart, { userId }) {
   let couponDescription = null
   let couponCode = cart.couponCode ?? null
   if (couponCode) {
-    try {
-      const couponResult = await validateCoupon(couponCode, { subtotalMinor, userId })
-      discountMinor = couponResult.discountMinor
-      couponDescription = couponResult.description
-    } catch {
+    if (lines.length === 0) {
+      // A coupon has nothing to attach to on an empty cart; drop it rather
+      // than leaving a stale discount attached to the next checkout.
       couponCode = null
       cart.couponCode = null
       changed = true
+    } else {
+      try {
+        const couponResult = await validateCoupon(couponCode, { subtotalMinor, userId, lines })
+        discountMinor = couponResult.discountMinor
+        couponDescription = couponResult.description
+      } catch {
+        couponCode = null
+        cart.couponCode = null
+        changed = true
+      }
     }
   }
 
@@ -331,6 +339,7 @@ export async function clearCartContents({ user, guestToken }) {
   if (cart) {
     cart.items = []
     cart.couponCode = null
+    cart.processingAt = null
     await cart.save()
   }
   return emptyCartDto()

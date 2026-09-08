@@ -21,6 +21,9 @@ import {
   TableRow
 } from '@/components/ui/table'
 
+// Mirrors ALLOWED_ORDER_TRANSITIONS from @shop/types (cancelled is handled
+// as its own destructive action below), so the UI cannot drift from the
+// backend state machine.
 const FLOW_NEXT: Record<string, string[]> = {
   pending: ['confirmed'],
   confirmed: ['processing'],
@@ -28,10 +31,20 @@ const FLOW_NEXT: Record<string, string[]> = {
   packed: ['shipped'],
   shipped: ['out_for_delivery'],
   out_for_delivery: ['delivered'],
-  return_requested: ['returned', 'refunded']
+  delivered: ['return_requested', 'refunded'],
+  return_requested: ['returned', 'refunded'],
+  returned: ['refunded']
 }
 
-const CANCELLABLE = new Set(['pending', 'confirmed', 'processing'])
+const CANCELLABLE = new Set([
+  'pending',
+  'confirmed',
+  'processing',
+  'packed',
+  'shipped',
+  'out_for_delivery',
+  'return_requested'
+])
 
 const NEXT_LABEL: Record<string, string> = {
   confirmed: 'Confirm order',
@@ -40,6 +53,7 @@ const NEXT_LABEL: Record<string, string> = {
   shipped: 'Mark as shipped',
   out_for_delivery: 'Out for delivery',
   delivered: 'Mark as delivered',
+  return_requested: 'Request return',
   returned: 'Mark returned',
   refunded: 'Mark refunded'
 }

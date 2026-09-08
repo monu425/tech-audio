@@ -1,9 +1,10 @@
 import * as adminService from './admin.service.js'
 import * as adminCatalogService from './admin.catalog.service.js'
+import { listAuditLogs as listAuditLogsQuery } from './audit.service.js'
 import { validatedQuery } from '../../middlewares/validate.js'
 
 function ok(res, data, status = 200) {
-  return res.status(status).json({ success: true, data })
+  return res.status(status).json({ success: true, message: 'Success', data })
 }
 
 function actor(req) {
@@ -21,6 +22,9 @@ export const getRoles = async (req, res) => ok(res, adminService.getRolesInfo())
 export const getSettings = async (req, res) => ok(res, await adminService.getSettingsView())
 export const updateSettings = async (req, res) =>
   ok(res, await adminService.updateSettings(req.body))
+
+export const listAuditLogs = async (req, res) =>
+  ok(res, await listAuditLogsQuery(validatedQuery(req)))
 
 export const listProducts = async (req, res) =>
   ok(res, await adminCatalogService.listProductsAdmin(pageable(req)))
@@ -103,6 +107,8 @@ export const moderateReview = async (req, res) =>
   ok(res, await adminCatalogService.moderateReviewAdmin(req.params.id, req.body))
 export const rejectReview = async (req, res) =>
   ok(res, await adminCatalogService.rejectReviewAdmin(req.params.id))
+export const deleteReview = async (req, res) =>
+  ok(res, await adminCatalogService.deleteReviewAdmin(req.params.id))
 
 export const getSalesReport = async (req, res) =>
   ok(res, await adminService.getSalesReport(validatedQuery(req)))

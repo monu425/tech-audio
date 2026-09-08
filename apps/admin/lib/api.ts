@@ -59,11 +59,12 @@ export async function request<T>(
   options: {
     method?: string
     body?: unknown
+    rawBody?: boolean
     headers?: Record<string, string>
     signal?: AbortSignal
   } = {}
 ): Promise<T> {
-  const { method = 'GET', body, headers = {}, signal } = options
+  const { method = 'GET', body, rawBody = false, headers = {}, signal } = options
   const init: RequestInit = {
     method,
     credentials: 'include',
@@ -71,8 +72,19 @@ export async function request<T>(
     signal
   }
   if (body !== undefined) {
-    init.headers = { ...init.headers, 'Content-Type': 'application/json' }
-    init.body = JSON.stringify(body)
+    if (rawBody) {
+      // FormData / Blob: let the browser set the Content-Type with its boundary.
+      init.body = body as BodyInit
+    } else {
+      init.headers = { ...init.headers, 'Content-Type': 'application/json' }
+      init.body = JSON.stringify(body)
+    }
+  }
+  if (typeof document !== 'undefined' && method !== 'GET') {
+    const match = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)
+    if (match) {
+      init.headers = { ...init.headers, 'X-CSRF-Token': decodeURIComponent(match[1]) }
+    }
   }
   const res = await fetch(`${API_BASE}${path}`, init)
   return parseResponse<T>(res, 'Request failed')

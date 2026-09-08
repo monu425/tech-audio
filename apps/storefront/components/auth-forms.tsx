@@ -34,7 +34,15 @@ export function LoginForm() {
       router.push(next)
       router.refresh()
     } catch (err) {
-      setError(isApiError(err) ? err.message : 'Unable to sign in.')
+      if (isApiError(err)) {
+        if (err.code === 'EMAIL_NOT_VERIFIED') {
+          router.push(`/verify-email?email=${encodeURIComponent(email)}`)
+          return
+        }
+        setError(err.message)
+      } else {
+        setError('Unable to sign in.')
+      }
     } finally {
       setBusy(false)
     }

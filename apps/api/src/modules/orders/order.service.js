@@ -2,8 +2,14 @@ import Order, { nextOrderNumber } from './order.model.js'
 import Address from '../address/address.model.js'
 import Product from '../catalog/product.model.js'
 import User from '../auth/user.model.js'
+import Cart from '../cart/cart.model.js'
 import { getCartByUser, clearCartContents } from '../cart/cart.service.js'
-import { validateCoupon, useCoupon as consumeCoupon } from '../coupon/coupon.service.js'
+import {
+  validateCoupon,
+  useCoupon as consumeCoupon,
+  releaseCouponUse,
+  releaseCouponByCode
+} from '../coupon/coupon.service.js'
 import {
   reserveProductStock,
   reserveVariantStock,
@@ -19,10 +25,27 @@ import { getTaxRatePercent, getPlatformSettings } from '../../config/platformCon
 import { env } from '../../config/env.js'
 import { createLogger } from '../../config/logger.js'
 import { sendOrderConfirmation, sendOrderStatusUpdate } from '../../services/mailer.service.js'
-import { NotFoundError, BadRequestError, PaymentRequiredError } from '../../utils/errors.js'
+import {
+  NotFoundError,
+  BadRequestError,
+  PaymentRequiredError,
+  ConflictError
+} from '../../utils/errors.js'
 import { OrderStatuses, OrderPaymentStatuses } from '@shop/types'
 
 const mailLogger = createLogger('order-mail')
+
+// Providers that capture funds immediately at order time. Orders using any
+// other provider start as pending and only become paid when funds are actually
+// captured (e.g. cash on delivery at fulfilment). No provider is configured
+// for instant capture in this build, so every order starts pending.
+const INSTANT_CAPTURE_PROVIDERS = new Set([])
+
+function initialPaymentStatusFor(paymentMethod) {
+  return INSTANT_CAPTURE_PROVIDERS.has(paymentMethod)
+    ? OrderPaymentStatuses.PAID
+    : OrderPaymentStatuses.PENDING
+}
 
 function notify(promise) {
   promise.catch((error) => {
@@ -46,6 +69,9 @@ function toOrderDto(order) {
     taxMinor: doc.taxMinor,
     totalMinor: doc.totalMinor,
     items: (doc.items ?? []).map((item) => ({
+      id:
+        item._id?.toString() ??
+        `${item.productId.toString() ?? item.productId}:${item.variantId?.toString() ?? ''}`,
       productId: item.productId?.toString?.() ?? item.productId,
       variantId: item.variantId?.toString?.() ?? item.variantId ?? null,
       name: item.name,
@@ -206,9 +232,29 @@ export async function placeOrder(userId, { addressId, shippingMethodId, paymentM
   if (!address) throw new BadRequestError('Shipping address not found', 'ADDRESS_NOT_FOUND')
   if (cartDto.lines.length === 0) throw new BadRequestError('Your cart is empty', 'CART_EMPTY')
 
+  // Idempotency guard: atomically claim the cart so two concurrent checkout
+  // submits cannot both place an order from the same cart. The claim is lifted
+  // when the cart is cleared after a successful order or in the error path;
+  // a stale claim (older than 60s) is treated as free for retries.
+  const claim = await Cart.updateOne(
+    {
+      user: userId,
+      items: { $ne: [] },
+      $or: [{ processingAt: null }, { processingAt: { $lt: new Date(Date.now() - 60_000) } }]
+    },
+    { $set: { processingAt: new Date() } }
+  )
+  if (claim.matchedCount === 0) {
+    throw new ConflictError(
+      'Your order is already being processed. Refresh to see its status.',
+      'ORDER_IN_PROGRESS'
+    )
+  }
+
   const orderNumber = await nextOrderNumber()
   const reserved = []
   const items = []
+  let consumedCouponId = null
 
   try {
     for (const line of cartDto.lines) {
@@ -243,7 +289,7 @@ export async function placeOrder(userId, { addressId, shippingMethodId, paymentM
           optionSummary: line.optionSummary,
           unitPriceMinor: variant.priceMinor ?? product.priceMinor,
           quantity: line.quantity,
-          lineTotalMinor: line.unitPriceMinor * line.quantity
+          lineTotalMinor: (variant.priceMinor ?? product.priceMinor) * line.quantity
         })
       } else {
         await reserveProductStock(
@@ -262,7 +308,7 @@ export async function placeOrder(userId, { addressId, shippingMethodId, paymentM
           optionSummary: null,
           unitPriceMinor: product.priceMinor,
           quantity: line.quantity,
-          lineTotalMinor: line.unitPriceMinor * line.quantity
+          lineTotalMinor: product.priceMinor * line.quantity
         })
       }
       reserved.push({
@@ -272,23 +318,41 @@ export async function placeOrder(userId, { addressId, shippingMethodId, paymentM
       })
     }
 
-    const subtotalMinor = cartDto.totals.subtotalMinor
-    const shippingMinor = computeShippingPriceMinor(method.id, subtotalMinor)
+    // Money is recomputed server-side from the just-reserved line items (current
+    // product prices), never from client-provided cart figures, so the stored
+    // per-line totals always reconcile with the order's grand total.
+    const subtotalMinor = items.reduce((sum, item) => sum + item.lineTotalMinor, 0)
 
     let discountMinor = 0
     let couponCode = null
     let couponDescription = null
     if (cartDto.couponCode) {
+      // Pass the cart's hydrated lines so product/category-restricted coupons
+      // are evaluated against the items actually being ordered.
       const couponResult = await validateCoupon(cartDto.couponCode, {
         subtotalMinor,
-        userId
+        userId,
+        lines: cartDto.lines
       })
       discountMinor = couponResult.discountMinor
       couponCode = cartDto.couponCode
       couponDescription = couponResult.description
+
+      // Claim the coupon use BEFORE the order exists so a quota failure cannot
+      // orphan a persisted order that never consumed the coupon.
+      await consumeCoupon(couponResult.coupon, userId)
+      consumedCouponId = couponResult.coupon._id
     }
 
+    // Shipping is priced on the discounted subtotal, matching the checkout
+    // preview so the displayed total always equals the charged total.
+    const shippingMinor = computeShippingPriceMinor(
+      method.id,
+      Math.max(0, subtotalMinor - discountMinor)
+    )
     const totals = computeTotals({ subtotalMinor, discountMinor, shippingMinor })
+
+    const account = await User.findById(userId).select('email name').lean()
 
     const addressSnapshot = {
       fullName: address.fullName,
@@ -305,8 +369,7 @@ export async function placeOrder(userId, { addressId, shippingMethodId, paymentM
       orderNumber,
       user: userId,
       status: OrderStatuses.PENDING,
-      paymentStatus:
-        paymentMethod === 'cod' ? OrderPaymentStatuses.PENDING : OrderPaymentStatuses.PAID,
+      paymentStatus: initialPaymentStatusFor(paymentMethod),
       paymentMethod,
       currency: 'USD',
       items,
@@ -324,21 +387,16 @@ export async function placeOrder(userId, { addressId, shippingMethodId, paymentM
       },
       shippingAddress: addressSnapshot,
       billingAddress: addressSnapshot,
-      email: null,
+      email: account?.email ?? null,
       notes: notes ?? null,
       timeline: [{ status: OrderStatuses.PENDING, note: 'Order placed', at: new Date() }]
     })
 
-    if (couponCode) {
-      const couponResult = await validateCoupon(couponCode, { subtotalMinor, userId })
-      await consumeCoupon(couponResult.coupon, userId)
-    }
     await clearCartContents({ user: userId })
 
-    const customer = await User.findById(userId).select('email name').lean()
     const recipient = {
-      to: customer?.email,
-      name: customer?.name || address.fullName || 'there'
+      to: account?.email,
+      name: account?.name || address.fullName || 'there'
     }
     if (recipient.to) {
       notify(
@@ -353,11 +411,16 @@ export async function placeOrder(userId, { addressId, shippingMethodId, paymentM
 
     return { order: toOrderDto(order) }
   } catch (error) {
+    // Release the in-progress claim so the cart can be checked out again.
+    await Cart.updateOne({ user: userId }, { $set: { processingAt: null } })
     for (const item of reserved) {
       await releaseReservation(item.productId, item.variantId, item.quantity, {
         type: 'order',
         id: orderNumber
       })
+    }
+    if (consumedCouponId) {
+      await releaseCouponUse(consumedCouponId, userId)
     }
     throw error
   }
@@ -384,6 +447,10 @@ export async function cancelMyOrder(userId, orderId) {
     note: 'Cancelled by customer',
     at: new Date()
   })
+  if (order.couponCode && !order.couponReleasedAt) {
+    order.couponReleasedAt = new Date()
+    await releaseCouponByCode(order.couponCode, order.user)
+  }
   await order.save()
 
   for (const item of order.items) {

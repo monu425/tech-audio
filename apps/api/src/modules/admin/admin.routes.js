@@ -33,9 +33,12 @@ import {
 } from './admin.schemas.js'
 import { z } from 'zod'
 
+import { auditLogger } from '../../middlewares/auditLogger.js'
+
 const adminRouter = Router()
 
 adminRouter.use(requireAuth, requireAdmin())
+adminRouter.use(auditLogger)
 
 adminRouter.get('/me', admin.getMe)
 
@@ -44,6 +47,15 @@ const couponsListQuery = paginationQuery(20, {
 })
 const reviewsListQuery = paginationQuery(20, {
   status: z.enum(['pending', 'approved', 'rejected']).optional()
+})
+const auditLogsQuery = paginationQuery(50, {
+  resource: z.string().trim().min(1).max(60).optional(),
+  actorId: z
+    .string()
+    .trim()
+    .regex(/^[a-f\d]{24}$/i, 'Invalid actorId')
+    .optional(),
+  action: z.string().trim().min(1).max(120).optional()
 })
 
 adminRouter.get('/dashboard', requirePermission(PERMISSIONS.DASHBOARD_READ), admin.getDashboard)
@@ -270,6 +282,12 @@ adminRouter.post(
   validateParams(idParamSchema),
   admin.rejectReview
 )
+adminRouter.delete(
+  '/reviews/:id',
+  requirePermission(PERMISSIONS.REVIEW_MODERATE),
+  validateParams(idParamSchema),
+  admin.deleteReview
+)
 
 adminRouter.get(
   '/reports/sales',
@@ -282,6 +300,13 @@ adminRouter.get(
   requirePermission(PERMISSIONS.REPORT_READ),
   validateQuery(topProductsQuery),
   admin.getTopProducts
+)
+
+adminRouter.get(
+  '/audit-logs',
+  requirePermission(PERMISSIONS.AUDIT_READ),
+  validateQuery(auditLogsQuery),
+  admin.listAuditLogs
 )
 
 export default adminRouter

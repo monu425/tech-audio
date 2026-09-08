@@ -23,6 +23,44 @@ async function ensureUniqueSlug(Model, slug, excludeId, fieldMessage = 'Slug alr
   return slug
 }
 
+export function normalizeSkuValue(value) {
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+}
+
+/**
+ * Ensures none of the given SKUs (product-level or variant-level) is already
+ * used by another product in the catalog, and that there are no duplicates
+ * within the supplied set.
+ */
+export async function assertSkuAvailable(skus, excludeId = null) {
+  const needles = [...new Set(skus.map(normalizeSkuValue).filter(Boolean))]
+  if (needles.length === 0) return
+
+  const seen = new Set()
+  for (const sku of needles) {
+    if (seen.has(sku)) {
+      throw new ConflictError(`SKU ${sku} is already in use`, 'SKU_EXISTS')
+    }
+    seen.add(sku)
+  }
+
+  const filter = excludeId ? { _id: { $ne: excludeId } } : {}
+  const found = await Product.findOne({
+    ...filter,
+    $or: needles.flatMap((sku) => [{ sku }, { 'variants.sku': sku }])
+  })
+    .select('_id sku variants.sku')
+    .lean()
+  if (!found) return
+
+  const taken = needles.find(
+    (sku) => found.sku === sku || (found.variants ?? []).some((variant) => variant.sku === sku)
+  )
+  throw new ConflictError(`SKU ${taken} is already in use`, 'SKU_EXISTS')
+}
+
 function normalizeOptions(options) {
   const out = {}
   for (const [key, value] of Object.entries(options ?? {})) {
@@ -164,12 +202,13 @@ export async function createProduct(data) {
   if (data.brandId && !(await Brand.findById(data.brandId).lean())) {
     throw new NotFoundError('Brand not found', 'BRAND_NOT_FOUND')
   }
+  const sku = normalizeSkuValue(data.sku)
+  const variants = normalizeVariants(data.variants)
+  await assertSkuAvailable([sku, ...variants.map((variant) => variant.sku)])
   const product = await Product.create({
     name: data.name,
     slug,
-    sku: String(data.sku ?? '')
-      .trim()
-      .toUpperCase(),
+    sku,
     shortDescription: data.shortDescription ?? null,
     description: data.description ?? null,
     brandId: data.brandId ?? null,
@@ -182,7 +221,7 @@ export async function createProduct(data) {
     reserved: 0,
     lowStockThreshold: data.lowStockThreshold ?? 5,
     attributes: data.attributes ?? [],
-    variants: normalizeVariants(data.variants),
+    variants,
     tags: data.tags ?? [],
     seo: data.seo ?? {},
     status: data.status ?? ProductStatuses.DRAFT,
@@ -234,9 +273,10 @@ export async function updateProduct(id, data) {
     if (data[field] !== undefined) existing[field] = data[field]
   }
   if (data.variants !== undefined) {
-    existing.variants = normalizeVariants(data.variants).map((variant, index) => {
-      const prev = existing.variants[index]
-      if (prev && prev.reserved > 0 && variant.sku === prev.sku) {
+    const prevBySku = new Map(existing.variants.map((variant) => [variant.sku, variant]))
+    existing.variants = normalizeVariants(data.variants).map((variant) => {
+      const prev = prevBySku.get(variant.sku)
+      if (prev && prev.reserved > 0) {
         return { ...variant, reserved: prev.reserved }
       }
       return variant
@@ -246,7 +286,10 @@ export async function updateProduct(id, data) {
     existing.stock = Math.max(0, Math.round(data.stock))
     if (existing.reserved > existing.stock) existing.reserved = existing.stock
   }
-  if (typeof data.sku === 'string') existing.sku = data.sku.trim().toUpperCase()
+  if (typeof data.sku === 'string') existing.sku = normalizeSkuValue(data.sku)
+
+  const candidateSkus = [existing.sku, ...(existing.variants ?? []).map((variant) => variant.sku)]
+  await assertSkuAvailable(candidateSkus, existing.id)
   await existing.save()
   return toProductDoc(existing)
 }
@@ -337,7 +380,11 @@ async function buildProductMatch(
   if (query.category) {
     const category = categoryBySlug.get(query.category) ?? null
     if (!category || category.status !== 'active') return null
-    match.categoryIds = { $in: [category._id, ...category.ancestors] }
+    // Products persist their full category path [root,...,leaf]. Membership of
+    // the requested category therefore captures the whole subtree (the category
+    // itself and its descendants) while excluding sibling branches that merely
+    // share one of this category's ancestors.
+    match.categoryIds = category._id
   }
   if (query.minPrice !== undefined || query.maxPrice !== undefined) {
     match.priceMinor = {}

@@ -20,7 +20,44 @@ export const metadata: Metadata = {
     title: 'Voltify — Premium Electronics Store',
     description:
       'Shop premium phone accessories, earbuds, projectors, keyboards, mice and consumer electronics.'
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Voltify — Premium Electronics Store',
+    description:
+      'Shop premium phone accessories, earbuds, projectors, keyboards, mice and consumer electronics.'
   }
+}
+
+const organizationJsonLd = {
+  '@context': 'https://schema.org',
+  '@graph': [
+    {
+      '@type': 'Organization',
+      '@id': `${process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'}/#organization`,
+      name: 'Voltify',
+      url: process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
+    },
+    {
+      '@type': 'WebSite',
+      '@id': `${process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'}/#website`,
+      url: process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000',
+      name: 'Voltify',
+      publisher: {
+        '@id': `${process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'}/#organization`
+      },
+      potentialAction: {
+        '@type': 'SearchAction',
+        target: {
+          '@type': 'EntryPoint',
+          urlTemplate: `${
+            process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
+          }/products?q={search_term_string}`
+        },
+        'query-input': 'required name=search_term_string'
+      }
+    }
+  ]
 }
 
 export default function RootLayout({
@@ -48,6 +85,10 @@ export default function RootLayout({
             </div>
           </footer>
           <CartDrawer />
+          <script
+            type="application/ld+json"
+            dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }}
+          />
         </CartProvider>
       </body>
     </html>

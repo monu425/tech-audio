@@ -11,6 +11,7 @@ import {
   ErrorAlert,
   LoadingCard,
   PageHeader,
+  Pagination,
   StatusBadge,
   useListQuery
 } from '@/components/admin/primitives'
@@ -57,7 +58,7 @@ const EMPTY_FORM: FormState = {
 }
 
 export default function CouponsPage() {
-  const { searchParams, setQuery, page } = useListQuery()
+  const { searchParams, setQuery, setPage, page } = useListQuery()
   const q = searchParams.get('q') ?? ''
   const status = searchParams.get('statusFilter') ?? 'all'
 
@@ -221,6 +222,12 @@ export default function CouponsPage() {
           </CardContent>
         </Card>
       )}
+
+      {!loading && !error ? (
+        <div className="mt-4">
+          <Pagination page={page} totalPages={data?.meta.totalPages ?? 1} onChange={setPage} />
+        </div>
+      ) : null}
 
       <Dialog
         open={createOpen}

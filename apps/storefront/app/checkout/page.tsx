@@ -103,6 +103,16 @@ export default function CheckoutPage() {
     [options, shippingMethodId]
   )
 
+  // The cart never includes shipping/tax, so compute the true payable figure
+  // from the selected (threshold-adjusted) method and the store tax rate.
+  const subtotalMinor = totals?.subtotalMinor ?? 0
+  const discountMinor = totals?.discountMinor ?? 0
+  const shippingMinor = shippingMethod?.priceMinor ?? 0
+  const taxMinor = Math.round(
+    (Math.max(0, subtotalMinor - discountMinor) * (options?.taxRatePercent ?? 0)) / 100
+  )
+  const totalMinor = Math.max(0, subtotalMinor - discountMinor) + shippingMinor + taxMinor
+
   if (placed) {
     return (
       <div className="mx-auto flex w-full max-w-2xl flex-col items-center gap-5 px-4 py-20 text-center">
@@ -154,9 +164,7 @@ export default function CheckoutPage() {
             <Link href="/login?next=/checkout">Sign in</Link>
           </Button>
           <Button asChild size="lg" variant="outline">
-            <Link href="/cart" className="hidden">
-              Review cart
-            </Link>
+            <Link href="/cart">Review cart</Link>
           </Button>
         </div>
       </div>
@@ -400,11 +408,11 @@ export default function CheckoutPage() {
               </div>
               <div className="flex justify-between">
                 <dt className="text-muted-foreground">Tax</dt>
-                <dd>{formatMoney(totals?.taxMinor ?? 0)}</dd>
+                <dd>{formatMoney(taxMinor)}</dd>
               </div>
               <div className="flex justify-between border-t pt-3 text-base font-semibold">
                 <dt>Total</dt>
-                <dd>{formatMoney(totals?.grandTotalMinor ?? 0)}</dd>
+                <dd>{formatMoney(totalMinor)}</dd>
               </div>
             </dl>
           </div>
@@ -423,7 +431,7 @@ export default function CheckoutPage() {
             onClick={() => void placeOrder()}
           >
             <Lock className="size-4" />
-            {busy ? 'Placing order…' : `Place order · ${formatMoney(totals?.grandTotalMinor ?? 0)}`}
+            {busy ? 'Placing order…' : `Place order · ${formatMoney(totalMinor)}`}
           </Button>
           <p className="text-center text-xs text-muted-foreground">
             Cash on delivery only · No payment taken now

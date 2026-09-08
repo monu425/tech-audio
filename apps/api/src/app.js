@@ -9,6 +9,7 @@ import { pinoHttp } from 'pino-http'
 import { env, isAllowedSource } from './config/env.js'
 import { httpLoggerOptions } from './config/logger.js'
 import { globalLimiter } from './config/rateLimit.js'
+import { csrfProtection } from './middlewares/csrf.js'
 import { errorHandler } from './middlewares/errorHandler.js'
 import { notFoundHandler } from './middlewares/notFound.js'
 import v1Router from './routes/v1.js'
@@ -49,6 +50,8 @@ export function createApp() {
   app.use(express.json({ limit: env.bodyLimit }))
   app.use(express.urlencoded({ extended: true, limit: env.bodyLimit }))
   app.use(cookieParser())
+
+  app.use(csrfProtection)
 
   const uploadsDir = path.resolve(env.mediaUploadDir)
   mkdirSync(uploadsDir, { recursive: true })

@@ -9,6 +9,7 @@ export function getHealth(req, res, next) {
     return res.status(statusCode).json({
       success: state === 'connected',
       message: state === 'connected' ? 'OK' : 'Service unavailable',
+      ...(state === 'connected' ? {} : { error: { code: 'SERVICE_UNAVAILABLE' } }),
       data: {
         status: state === 'connected' ? 'up' : 'degraded',
         database: state,

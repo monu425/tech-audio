@@ -1,7 +1,7 @@
 import { ZodError } from 'zod'
 
 import { env } from '../config/env.js'
-import { AppError, ValidationError } from '../utils/errors.js'
+import { AppError, ConflictError, ValidationError } from '../utils/errors.js'
 
 export function errorHandler(err, req, res, _next) {
   let error = err
@@ -13,6 +13,37 @@ export function errorHandler(err, req, res, _next) {
       fields[key] = issue.message
     }
     error = new ValidationError(fields)
+  }
+
+  // Mongoose ObjectId cast failures (e.g. malformed :id params / query ids)
+  if (error && !(error instanceof AppError) && error.name === 'CastError') {
+    const key = error.path === '_id' ? 'id' : error.path || 'id'
+    error = new ValidationError({ [key]: 'Invalid id' }, 'Invalid id')
+  }
+
+  // Mongoose document validation errors
+  if (
+    error &&
+    !(error instanceof AppError) &&
+    error.name === 'ValidationError' &&
+    typeof error.errors === 'object'
+  ) {
+    const fields = {}
+    for (const key of Object.keys(error.errors)) {
+      fields[key] = error.errors[key]?.message ?? 'Invalid value'
+    }
+    error = new ValidationError(fields)
+  }
+
+  // Mongo duplicate-key violations (unique indexes)
+  if (error && !(error instanceof AppError) && error.code === 11000) {
+    const keyValue = error.keyValue ?? {}
+    const field = Object.keys(keyValue)[0]
+    error = new ConflictError(
+      field ? `A record with that ${field} already exists` : 'Resource already exists',
+      'DUPLICATE_KEY'
+    )
+    if (field) error.fields = { [field]: 'Already in use' }
   }
 
   // Body parser (json/urlencoded) syntax or size errors

@@ -15,6 +15,10 @@ const wishlistRouter = Router()
 
 const objectId = z.string().regex(/^[a-f\d]{24}$/i, 'Invalid product id')
 const productBodySchema = z.object({ productId: objectId })
+const moveToCartSchema = z.object({
+  productId: objectId,
+  variantId: objectId.nullable().optional()
+})
 const productParamSchema = z.object({ productId: objectId })
 
 export async function listHandler(req, res, next) {
@@ -46,8 +50,11 @@ export async function removeHandler(req, res, next) {
 
 export async function moveHandler(req, res, next) {
   try {
-    const data = await moveWishlistItemToCart(req.user._id, req.body.productId, (args) =>
-      addToCart({ user: req.user._id, guestToken: null, ...args })
+    const data = await moveWishlistItemToCart(
+      req.user._id,
+      req.body.productId,
+      { variantId: req.body.variantId ?? null },
+      (args) => addToCart({ user: req.user._id, guestToken: null, ...args })
     )
     return sendSuccess(res, { message: 'Moved to cart', data })
   } catch (err) {
@@ -59,7 +66,7 @@ wishlistRouter.use(requireAuth)
 
 wishlistRouter.get('/', listHandler)
 wishlistRouter.post('/items', validateBody(productBodySchema), addHandler)
-wishlistRouter.post('/items/move-to-cart', validateBody(productBodySchema), moveHandler)
+wishlistRouter.post('/items/move-to-cart', validateBody(moveToCartSchema), moveHandler)
 wishlistRouter.delete('/items/:productId', validateParams(productParamSchema), removeHandler)
 
 export default wishlistRouter

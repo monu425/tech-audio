@@ -28,6 +28,12 @@ export async function disconnectDB() {
   logger.info('mongodb disconnected')
 }
 
+export async function syncModelIndexes() {
+  const modelNames = mongoose.modelNames()
+  await Promise.all(modelNames.map((name) => mongoose.model(name).syncIndexes()))
+  logger.info({ modelCount: modelNames.length }, 'model indexes synchronised')
+}
+
 export function dbState() {
   const state = mongoose.connection.readyState
   // 0 disconnected, 1 connected, 2 connecting, 3 disconnecting

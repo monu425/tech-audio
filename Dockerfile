@@ -38,7 +38,8 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/apps/api ./apps/api
-RUN mkdir -p /data/uploads
+RUN mkdir -p /data/uploads && chown -R node:node /app /data/uploads
+USER node
 EXPOSE 4000
 WORKDIR /app/apps/api
 CMD ["node", "src/server.js"]
@@ -48,6 +49,12 @@ CMD ["node", "src/server.js"]
 # ---------------------------------------------------------------------------
 FROM builder AS storefront-builder
 WORKDIR /app
+ARG NEXT_PUBLIC_API_BASE=/api/v1
+ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
+ARG API_PROXY_TARGET=http://api:4000
+ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+ENV API_PROXY_TARGET=$API_PROXY_TARGET
 RUN npm run build -w @shop/storefront
 
 FROM node:22-alpine AS storefront
@@ -60,6 +67,8 @@ COPY --from=storefront-builder /app/apps/storefront/package.json ./apps/storefro
 COPY --from=storefront-builder /app/apps/storefront/.next ./apps/storefront/.next
 COPY --from=storefront-builder /app/apps/storefront/next.config.ts ./apps/storefront/next.config.ts
 COPY --from=storefront-builder /app/apps/storefront/tsconfig.json ./apps/storefront/tsconfig.json
+RUN chown -R node:node /app
+USER node
 EXPOSE 3000
 WORKDIR /app/apps/storefront
 CMD ["npx", "next", "start", "-H", "0.0.0.0", "-p", "3000"]
@@ -69,6 +78,12 @@ CMD ["npx", "next", "start", "-H", "0.0.0.0", "-p", "3000"]
 # ---------------------------------------------------------------------------
 FROM builder AS admin-builder
 WORKDIR /app
+ARG NEXT_PUBLIC_API_BASE=/api/v1
+ARG NEXT_PUBLIC_SITE_URL=http://localhost:3001
+ARG API_PROXY_TARGET=http://api:4000
+ENV NEXT_PUBLIC_API_BASE=$NEXT_PUBLIC_API_BASE
+ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
+ENV API_PROXY_TARGET=$API_PROXY_TARGET
 RUN npm run build -w @shop/admin
 
 FROM node:22-alpine AS admin
@@ -81,6 +96,8 @@ COPY --from=admin-builder /app/apps/admin/package.json ./apps/admin/package.json
 COPY --from=admin-builder /app/apps/admin/.next ./apps/admin/.next
 COPY --from=admin-builder /app/apps/admin/next.config.ts ./apps/admin/next.config.ts
 COPY --from=admin-builder /app/apps/admin/tsconfig.json ./apps/admin/tsconfig.json
+RUN chown -R node:node /app
+USER node
 EXPOSE 3001
 WORKDIR /app/apps/admin
 CMD ["npx", "next", "start", "-H", "0.0.0.0", "-p", "3001"]

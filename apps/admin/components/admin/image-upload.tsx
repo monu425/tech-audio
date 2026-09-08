@@ -5,6 +5,7 @@ import { Loader2, Upload, X } from 'lucide-react'
 
 import { errorMessage } from '@/components/admin/use-async'
 import { Button } from '@/components/ui/button'
+import { request } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
 export function ImageUpload({
@@ -43,20 +44,12 @@ export function ImageUpload({
     try {
       const body = new FormData()
       body.append('file', file)
-      const response = await fetch('/api/v1/media/images', {
+      const payload = await request<{ url: string }>('/media/images', {
         method: 'POST',
-        credentials: 'include',
-        body
+        body,
+        rawBody: true
       })
-      const payload = (await response.json()) as {
-        success: boolean
-        message?: string
-        data?: { url?: string }
-      }
-      if (!response.ok || !payload.success || !payload.data?.url) {
-        throw new Error(payload.message ?? 'Upload failed.')
-      }
-      onChange(payload.data.url)
+      onChange(payload.url)
     } catch (err) {
       setError(errorMessage(err))
     } finally {

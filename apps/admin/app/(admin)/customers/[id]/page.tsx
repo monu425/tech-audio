@@ -106,11 +106,16 @@ export default function CustomerDetailPage() {
                 <span>{formatNumber(orders.meta.totalItems)}</span>
               </div>
               <div className="flex justify-between border-t pt-2">
-                <span className="text-muted-foreground">Lifetime spend</span>
-                <span className="font-semibold">
+                <span className="text-muted-foreground">Recent orders total</span>
+                <span className="text-right font-semibold">
                   {formatMoney(orders.items.reduce((sum, order) => sum + order.totalMinor, 0))}
                 </span>
               </div>
+              {orders.meta.totalItems > orders.items.length ? (
+                <p className="text-xs text-muted-foreground">
+                  Showing the latest {orders.items.length} of {orders.meta.totalItems} orders.
+                </p>
+              ) : null}
             </CardContent>
           </Card>
 

@@ -102,7 +102,7 @@ export interface Review {
   rating: number
   title: string | null
   body: string | null
-  userName: string
+  user: { name: string }
   createdAt: string
   images?: ImageRef[]
 }
@@ -110,10 +110,10 @@ export interface Review {
 export interface ReviewsListData {
   items: Review[]
   meta: PaginationMeta
-  summary: {
+  ratingSummary: {
     average: number
-    total: number
-    distribution: Record<string, number>
+    count: number
+    breakdown: Record<string, number>
   }
 }
 

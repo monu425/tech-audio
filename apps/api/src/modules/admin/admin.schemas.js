@@ -132,6 +132,16 @@ export const couponPayload = z.object({
   expiresAt: z.coerce.date().nullable().optional(),
   usageLimit: z.coerce.number().int().min(1).nullable().optional(),
   perUserLimit: z.coerce.number().int().min(1).nullable().optional(),
+  productIds: z
+    .array(z.string().regex(/^[a-f\d]{24}$/i, 'Invalid product id'))
+    .max(200)
+    .optional()
+    .default([]),
+  categoryIds: z
+    .array(z.string().regex(/^[a-f\d]{24}$/i, 'Invalid category id'))
+    .max(100)
+    .optional()
+    .default([]),
   enabled: z.boolean().optional().default(true)
 })
 

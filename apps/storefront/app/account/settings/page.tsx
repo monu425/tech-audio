@@ -186,8 +186,8 @@ function SessionsCard() {
   const [sessions, setSessions] = useState<SessionInfo[] | null>(null)
 
   const load = useCallback(() => {
-    getJson<{ items: SessionInfo[] } | SessionInfo[]>('/auth/sessions')
-      .then((data) => setSessions(Array.isArray(data) ? data : data.items))
+    getJson<{ sessions: SessionInfo[] }>('/auth/sessions')
+      .then((data) => setSessions(data.sessions))
       .catch(() => setSessions([]))
   }, [])
 

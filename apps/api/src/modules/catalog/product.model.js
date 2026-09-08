@@ -92,6 +92,7 @@ productSchema.index({ status: 1, publishedAt: -1 })
 productSchema.index({ status: 1, featured: 1, publishedAt: -1 })
 productSchema.index({ status: 1, ratingAverage: -1 })
 productSchema.index({ status: 1, priceMinor: 1 })
+productSchema.index({ sku: 1 }, { unique: true })
 productSchema.index({ name: 1, sku: 1, shortDescription: 1, tags: 1 })
 
 const Product = mongoose.models.Product || mongoose.model('Product', productSchema)

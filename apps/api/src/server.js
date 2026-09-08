@@ -1,5 +1,5 @@
 import { createApp } from './app.js'
-import { connectDB, disconnectDB } from './config/db.js'
+import { connectDB, disconnectDB, syncModelIndexes } from './config/db.js'
 import { loadPlatformSettings } from './config/platformConfig.js'
 import { env } from './config/env.js'
 import { createLogger } from './config/logger.js'
@@ -10,6 +10,13 @@ async function start() {
   await connectDB()
   await loadPlatformSettings()
   const app = createApp()
+
+  // In production, autoIndex is disabled (see config/db.js) so indexes must be
+  // created explicitly once at boot. This guarantees unique constraints (SKU,
+  // slug, email, per-user coupon claim) exist before traffic starts.
+  if (env.isProduction) {
+    await syncModelIndexes()
+  }
 
   const server = app.listen(env.port, () => {
     logger.info(`api listening on http://localhost:${env.port} (${env.nodeEnv})`)

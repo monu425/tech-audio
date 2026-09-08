@@ -15,7 +15,7 @@ import {
   createCategory,
   createBrand
 } from '../catalog/catalog.service.js'
-import { moderateReview, refreshProductRating } from '../reviews/review.service.js'
+import { moderateReview, deleteReview, refreshProductRating } from '../reviews/review.service.js'
 import { couponStatusLabel } from '../coupon/coupon.service.js'
 import { adjustStock, escapeRegex } from '../inventory/stock.service.js'
 import { BadRequestError, NotFoundError, ConflictError } from '../../utils/errors.js'
@@ -486,6 +486,8 @@ const COUPON_FIELDS = [
   'expiresAt',
   'usageLimit',
   'perUserLimit',
+  'productIds',
+  'categoryIds',
   'enabled'
 ]
 
@@ -504,6 +506,8 @@ function toCouponDto(coupon) {
     usageLimit: doc.usageLimit ?? null,
     usedCount: doc.usedCount ?? 0,
     perUserLimit: doc.perUserLimit ?? null,
+    productIds: (doc.productIds ?? []).map((id) => id.toString()),
+    categoryIds: (doc.categoryIds ?? []).map((id) => id.toString()),
     enabled: doc.enabled ?? true,
     statusLabel: couponStatusLabel(doc),
     createdAt: doc.createdAt,
@@ -564,6 +568,8 @@ export async function createCouponAdmin(data) {
     expiresAt: data.expiresAt ?? null,
     usageLimit: data.usageLimit ?? null,
     perUserLimit: data.perUserLimit ?? null,
+    productIds: data.productIds ?? [],
+    categoryIds: data.categoryIds ?? [],
     enabled: data.enabled ?? true
   })
   return toCouponDto(coupon)
@@ -685,6 +691,10 @@ export async function rejectReviewAdmin(reviewId) {
   await review.save()
   await refreshProductRating(review.product)
   return { id: review._id.toString(), status: ReviewStatuses.REJECTED }
+}
+
+export async function deleteReviewAdmin(reviewId) {
+  return deleteReview({ reviewId })
 }
 
 async function loadByIdMap(Model, ids, fields) {

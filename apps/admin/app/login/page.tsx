@@ -1,7 +1,6 @@
 'use client'
 
 import * as React from 'react'
-import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Store } from 'lucide-react'
 
@@ -11,6 +10,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { ErrorAlert } from '@/components/admin/primitives'
+
+const STORE_URL = process.env.NEXT_PUBLIC_STORE_URL ?? 'http://localhost:3000'
+const ADMIN_ROLES = new Set(['super_admin', 'admin'])
 
 export default function AdminLoginPage() {
   const router = useRouter()
@@ -24,17 +26,21 @@ export default function AdminLoginPage() {
     setSubmitting(true)
     setError(null)
     try {
-      await postJson('/auth/login', { email, password })
+      const result = await postJson<{ user?: { role?: string } }>('/auth/login', {
+        email,
+        password
+      })
+      if (!result?.user || !ADMIN_ROLES.has(result.user.role ?? '')) {
+        // The API authenticates any account; reject non-admins here so a
+        // customer account never lands on the admin dashboard.
+        await postJson('/auth/logout').catch(() => undefined)
+        setError('Your account is not an administrator.')
+        return
+      }
       router.push('/dashboard')
       router.refresh()
     } catch (err) {
-      setError(
-        isApiError(err) && err.status === 403
-          ? 'Your account is not an administrator.'
-          : isApiError(err)
-            ? err.message
-            : 'Unable to sign in. Please try again.'
-      )
+      setError(isApiError(err) ? err.message : 'Unable to sign in. Please try again.')
     } finally {
       setSubmitting(false)
     }
@@ -80,9 +86,14 @@ export default function AdminLoginPage() {
             </Button>
             <p className="text-center text-xs text-muted-foreground">
               Not an admin?{' '}
-              <Link href="/" className="text-foreground underline-offset-4 hover:underline">
+              <a
+                href={STORE_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-foreground underline-offset-4 hover:underline"
+              >
                 Visit the storefront
-              </Link>
+              </a>
             </p>
           </form>
         </CardContent>

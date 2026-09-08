@@ -1,10 +1,22 @@
-import { OrderStatuses, OrderPaymentStatuses, UserRoles, UserStatuses } from '@shop/types'
+import {
+  OrderStatuses,
+  OrderPaymentStatuses,
+  UserRoles,
+  UserStatuses,
+  ALLOWED_ORDER_TRANSITIONS
+} from '@shop/types'
 import Order from '../orders/order.model.js'
 import User, { toPublicUser } from '../auth/user.model.js'
 import Address from '../address/address.model.js'
 import Review from '../reviews/review.model.js'
 import Coupon from '../coupon/coupon.model.js'
-import { releaseReservation, escapeRegex } from '../inventory/stock.service.js'
+import {
+  releaseReservation,
+  commitReservation,
+  restoreCommittedStock,
+  escapeRegex
+} from '../inventory/stock.service.js'
+import { releaseCouponByCode } from '../coupon/coupon.service.js'
 import Product from '../catalog/product.model.js'
 import { BadRequestError, NotFoundError } from '../../utils/errors.js'
 import { permissionsForRole, ROLE_LABELS } from '../../constants/permissions.js'
@@ -142,7 +154,8 @@ export async function getOrderDetail(orderId) {
     ...toOrderAdminDto(order, user),
     items: doc.items.map((item) => ({
       ...item,
-      id: item._id?.toString() ?? null,
+      id:
+        item._id?.toString() ?? `${item.productId.toString()}:${item.variantId?.toString() ?? ''}`,
       productId: item.productId.toString(),
       variantId: item.variantId?.toString() ?? null
     })),
@@ -155,19 +168,9 @@ export async function getOrderDetail(orderId) {
   }
 }
 
-const ORDER_TRANSITIONS = {
-  [OrderStatuses.PENDING]: [OrderStatuses.CONFIRMED, OrderStatuses.CANCELLED],
-  [OrderStatuses.CONFIRMED]: [OrderStatuses.PROCESSING, OrderStatuses.CANCELLED],
-  [OrderStatuses.PROCESSING]: [OrderStatuses.PACKED, OrderStatuses.CANCELLED],
-  [OrderStatuses.PACKED]: [OrderStatuses.SHIPPED],
-  [OrderStatuses.SHIPPED]: [OrderStatuses.OUT_FOR_DELIVERY],
-  [OrderStatuses.OUT_FOR_DELIVERY]: [OrderStatuses.DELIVERED],
-  [OrderStatuses.DELIVERED]: [],
-  [OrderStatuses.CANCELLED]: [],
-  [OrderStatuses.RETURN_REQUESTED]: [OrderStatuses.RETURNED, OrderStatuses.REFUNDED],
-  [OrderStatuses.RETURNED]: [],
-  [OrderStatuses.REFUNDED]: []
-}
+// Canonical transition graph lives in packages/types; the admin route reuses it
+// so the API surface cannot drift from the shared domain model.
+const ORDER_TRANSITIONS = ALLOWED_ORDER_TRANSITIONS
 
 export async function transitionOrder(orderId, payload, actor) {
   const order = await Order.findById(orderId)
@@ -182,6 +185,9 @@ export async function transitionOrder(orderId, payload, actor) {
   }
 
   const note = payload.note?.trim() || `Status changed to ${payload.status}`
+  const previousStatus = order.status
+  const reference = { type: 'order', id: order.orderNumber }
+
   if (payload.status === OrderStatuses.CANCELLED) {
     order.status = OrderStatuses.CANCELLED
     order.cancelledAt = new Date()
@@ -189,15 +195,14 @@ export async function transitionOrder(orderId, payload, actor) {
       order.paymentStatus = OrderPaymentStatuses.REFUNDED
     }
     order.timeline.push({ status: OrderStatuses.CANCELLED, note, at: new Date() })
+    if (order.couponCode && !order.couponReleasedAt) {
+      order.couponReleasedAt = new Date()
+      await releaseCouponByCode(order.couponCode, order.user)
+    }
     await order.save()
+    // Orders cancelled before delivery only ever had a reservation placed.
     for (const item of order.items) {
-      await releaseReservation(
-        item.productId,
-        item.variantId,
-        item.quantity,
-        { type: 'order', id: order.orderNumber },
-        actor._id
-      )
+      await releaseReservation(item.productId, item.variantId, item.quantity, reference, actor._id)
     }
     const user = await User.findById(order.user).select('name email').lean()
     if (user?.email) {
@@ -216,10 +221,37 @@ export async function transitionOrder(orderId, payload, actor) {
 
   order.status = payload.status
   if (payload.status === OrderStatuses.DELIVERED) {
+    // Deliveries finalize the reserved quantities into sold stock.
+    for (const item of order.items) {
+      await commitReservation(item.productId, item.variantId, item.quantity, reference, actor._id)
+    }
     if (order.paymentStatus === OrderPaymentStatuses.PENDING && order.paymentMethod === 'cod') {
       order.paymentStatus = OrderPaymentStatuses.PAID
       order.paidAt = new Date()
     }
+  }
+  if (
+    payload.status === OrderStatuses.RETURNED &&
+    previousStatus === OrderStatuses.RETURN_REQUESTED
+  ) {
+    // Accepted return: physical goods come back and are restocked.
+    for (const item of order.items) {
+      await restoreCommittedStock(
+        item.productId,
+        item.variantId,
+        item.quantity,
+        reference,
+        actor._id
+      )
+    }
+  }
+  if (
+    (payload.status === OrderStatuses.REFUNDED || payload.status === OrderStatuses.RETURNED) &&
+    order.couponCode &&
+    !order.couponReleasedAt
+  ) {
+    order.couponReleasedAt = new Date()
+    await releaseCouponByCode(order.couponCode, order.user)
   }
   if (payload.paymentStatus && payload.paymentStatus !== order.paymentStatus) {
     order.paymentStatus = payload.paymentStatus
@@ -255,8 +287,18 @@ export async function setOrderPaymentStatus(orderId, payload, _actor) {
     )
   }
   const wasPending = order.paymentStatus === OrderPaymentStatuses.PENDING
+  const wasRefunded = order.paymentStatus === OrderPaymentStatuses.REFUNDED
   order.paymentStatus = payload.paymentStatus
   if (payload.paymentStatus === OrderPaymentStatuses.PAID) order.paidAt = new Date()
+  if (
+    payload.paymentStatus === OrderPaymentStatuses.REFUNDED &&
+    !wasRefunded &&
+    order.couponCode &&
+    !order.couponReleasedAt
+  ) {
+    order.couponReleasedAt = new Date()
+    await releaseCouponByCode(order.couponCode, order.user)
+  }
   order.timeline.push({
     status: order.status,
     note:
@@ -325,8 +367,10 @@ export async function listCustomers(query) {
 }
 
 export async function getCustomerDetail(customerId) {
-  const user = await User.findById(customerId).lean()
-  if (!user) throw new NotFoundError('Customer not found', 'CUSTOMER_NOT_FOUND')
+  const user = await User.findById(customerId)
+  if (!user || user.role !== UserRoles.CUSTOMER) {
+    throw new NotFoundError('Customer not found', 'CUSTOMER_NOT_FOUND')
+  }
   const [addresses, recentOrders] = await Promise.all([
     Address.find({ user: customerId }).sort({ isDefault: -1, createdAt: -1 }).lean(),
     Order.find({ user: customerId }).sort({ createdAt: -1 }).limit(10).lean()
@@ -363,12 +407,16 @@ export async function updateCustomerStatus(customerId, payload, actor) {
     throw new BadRequestError('You cannot change your own status', 'SELF_UPDATE_NOT_ALLOWED')
   }
   const user = await User.findById(customerId)
-  if (!user) throw new NotFoundError('Customer not found', 'CUSTOMER_NOT_FOUND')
+  if (!user || user.role !== UserRoles.CUSTOMER) {
+    throw new NotFoundError('Customer not found', 'CUSTOMER_NOT_FOUND')
+  }
   if (!Object.values(UserStatuses).includes(payload.status)) {
     throw new BadRequestError('Invalid status', 'INVALID_STATUS')
   }
+  if (user.status === UserStatuses.INACTIVE && payload.status === UserStatuses.ACTIVE) {
+    user.lockedUntil = null
+  }
   user.status = payload.status
-  if (user.status === UserStatuses.ACTIVE) user.lockedUntil = null
   await user.save()
   return toPublicUser(user)
 }

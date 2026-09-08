@@ -4,6 +4,15 @@ import Order from '../orders/order.model.js'
 import { NotFoundError, AuthorizationError, ConflictError } from '../../utils/errors.js'
 import { OrderStatuses } from '@shop/types'
 
+const REVIEWABLE_ORDER_STATUSES = [
+  OrderStatuses.CONFIRMED,
+  OrderStatuses.PROCESSING,
+  OrderStatuses.PACKED,
+  OrderStatuses.SHIPPED,
+  OrderStatuses.OUT_FOR_DELIVERY,
+  OrderStatuses.DELIVERED
+]
+
 export async function refreshProductRating(productId) {
   const result = await Review.aggregate([
     { $match: { product: productId, status: 'approved' } },
@@ -85,19 +94,34 @@ export async function createReview({ user, productId, orderId, rating, title, bo
   const product = await Product.findById(productId).lean()
   if (!product) throw new NotFoundError('Product not found', 'PRODUCT_NOT_FOUND')
 
+  const purchaseOrder = await Order.findOne({
+    user: user._id,
+    'items.productId': productId,
+    status: { $in: REVIEWABLE_ORDER_STATUSES }
+  }).lean()
+  if (!purchaseOrder) {
+    throw new AuthorizationError(
+      'Only customers who purchased this product can review it',
+      'VERIFIED_PURCHASE_REQUIRED'
+    )
+  }
+
   const already = await Review.findOne({ user: user._id, product: productId })
   if (already) throw new ConflictError('You already reviewed this product', 'ALREADY_REVIEWED')
 
-  let verifiedPurchase = false
   if (orderId) {
     const order = await Order.findOne({
       _id: orderId,
       user: user._id,
-      status: OrderStatuses.DELIVERED,
+      status: { $in: REVIEWABLE_ORDER_STATUSES },
       'items.productId': productId
     }).lean()
-    if (!order) throw new AuthorizationError('Verified purchase required to attach an order')
-    verifiedPurchase = true
+    if (!order) {
+      throw new AuthorizationError(
+        'Verified purchase required to attach an order',
+        'VERIFIED_PURCHASE_REQUIRED'
+      )
+    }
   }
 
   const review = await Review.create({
@@ -108,7 +132,7 @@ export async function createReview({ user, productId, orderId, rating, title, bo
     title: title ?? null,
     body: body ?? null,
     images: images ?? [],
-    verifiedPurchase
+    verifiedPurchase: true
   })
   await refreshProductRating(productId)
   return { id: review._id.toString() }
@@ -121,4 +145,13 @@ export async function moderateReview({ reviewId, status }) {
   await review.save()
   await refreshProductRating(review.product)
   return { id: review._id.toString(), status }
+}
+
+export async function deleteReview({ reviewId }) {
+  const review = await Review.findById(reviewId)
+  if (!review) throw new NotFoundError('Review not found', 'REVIEW_NOT_FOUND')
+  const productId = review.product
+  await Review.deleteOne({ _id: review._id })
+  await refreshProductRating(productId)
+  return { id: reviewId }
 }
